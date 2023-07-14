@@ -1,5 +1,5 @@
 from dask.distributed import Client, LocalCluster
-from dask_jobqueue import LSFCluster
+from dask_jobqueue import SLURMCluster
 import dask.config
 from pathlib import Path
 import os
@@ -17,18 +17,13 @@ class _cluster(object):
     def __enter__(self):
         return self
 
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, exc_type, exc_value, traceback):
 
         if not self.persist_yaml:
             if os.path.exists(self.yaml_path):
                 os.remove(self.yaml_path)
-
-        if self.cluster is not None:
-            self.cluster.close()
-        if self.client is not None:
-            self.client.shutdown()
-            self.client.close()
-
+        self.client.close()
+        self.cluster.__exit__(exc_type, exc_value, traceback)
 
     def set_client(self, client):
         self.client = client
@@ -51,27 +46,23 @@ class _cluster(object):
         if self.cluster is not None:
             return self.cluster.dashboard_link
 
-    def adapt_cluster(self, min_workers=None, max_workers=None):
-        None
 
 
-
-
-class janelia_lsf_cluster(_cluster):
-
-    HOURLY_RATE_PER_CORE = 0.07
+class allen_slurm(_cluster):
+    HOURLY_RATE_PER_CORE = 0
 
     def __init__(
         self,
-        ncpus=4,
+        ncpus=64,
         processes=1,
         threads=None,
         min_workers=1,
-        max_workers=4,
-        walltime="3:59",
-        config=None,
+        max_workers=64,
+        walltime="24:00:00",
+        config={},
         **kwargs
     ):
+        print("CREATING ALLEN SLURM CLUSTER")
 
         # call super constructor
         super().__init__()
@@ -79,18 +70,24 @@ class janelia_lsf_cluster(_cluster):
         # set config defaults
         # comm.timeouts values are needed for scaling up big clusters
         config_defaults = {
-            'distributed.comm.timeouts.connect':'180s',
-            'distributed.comm.timeouts.tcp':'360s',
+            'distributed.comm.timeouts.connect':'600s',
+            'distributed.comm.timeouts.tcp':'600s',
+            'distributed.worker.resources.Foo': 1
         }
-        if config is not None:
-            config_defaults = {**config_defaults, **config}
+        config_defaults = {**config_defaults, **config}
         self.modify_dask_config(config_defaults)
 
         # store ncpus/per worker and worker limits
         self.adapt = None
         self.ncpus = ncpus
-        self.min_workers = min_workers
-        self.max_workers = max_workers
+        if 'min_workers' in kwargs:
+            self.min_workers = kwargs['min_workers']
+        else:
+            self.min_workers = min_workers
+        if 'max_workers' in kwargs:
+            self.max_workers = kwargs['max_workers']
+        else:
+            self.max_workers = max_workers
 
         # set environment vars
         # prevent overthreading outside dask
@@ -108,10 +105,10 @@ class janelia_lsf_cluster(_cluster):
         CWD = os.getcwd()
         PID = os.getpid()
         if "local_directory" not in kwargs:
-            kwargs["local_directory"] = f"/scratch/{USER}/"
+            kwargs["local_directory"] = '/scratch/fast/'+os.environ['SLURM_JOBID']
         if "log_directory" not in kwargs:
-            log_dir = f"{CWD}/dask_worker_logs_{PID}/"
-            Path(log_dir).mkdir(parents=False, exist_ok=True)
+            log_dir = f"{CWD}/{os.environ['SLURM_JOBID']}/{PID}"
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
             kwargs["log_directory"] = log_dir
 
         # compute ncpus/RAM relationship
@@ -123,17 +120,17 @@ class janelia_lsf_cluster(_cluster):
             threads = ncpus
 
         # create cluster
-        cluster = LSFCluster(
-            ncpus=ncpus,
-            processes=processes,
-            memory=memory,
-            mem=mem,
-            walltime=walltime,
-            cores=threads,
-            env_extra=env_extra,
+        cluster = SLURMCluster(
+            # n_workers=ncpus,
+            # processes=processes,
+            # memory=memory,
+            # mem=mem,
+            # walltime=walltime,
+            # cores=threads,
+            # log_directory=kwargs["log_directory"],
             **kwargs,
         )
-
+        print(cluster.job_script())
         # connect cluster to client
         client = Client(cluster)
         self.set_cluster(cluster)
@@ -141,14 +138,12 @@ class janelia_lsf_cluster(_cluster):
         print("Cluster dashboard link: ", cluster.dashboard_link)
         sys.stdout.flush()
 
-        # set adaptive cluster bounds
-        self.adapt_cluster(min_workers, max_workers)
+        # # set adaptive cluster bounds
+        self.adapt_cluster(self.min_workers, self.max_workers)
 
 
-    def __exit__(self, type, value, traceback):
-        if self.adapt is not None:
-            self.adapt.stop()
-        super().__exit__(type, value, traceback)
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
         
 
     def adapt_cluster(self, min_workers=None, max_workers=None):
@@ -176,7 +171,7 @@ class local_cluster(_cluster):
 
     def __init__(
         self,
-        config=None,
+        config={},
         memory_limit=None,
         **kwargs,
     ):
@@ -185,10 +180,8 @@ class local_cluster(_cluster):
         super().__init__()
 
         # set config defaults
-        # comm.timeouts values are needed for scaling up big clusters
         config_defaults = {}
-        if config is not None:
-            config = {**config_defaults, **config}
+        config = {**config_defaults, **config}
         self.modify_dask_config(config)
 
         # set LocalCluster defaults
@@ -202,4 +195,29 @@ class local_cluster(_cluster):
         client = Client(cluster)
         self.set_cluster(cluster)
         self.set_client(client)
+
+
+
+
+class remote_cluster(_cluster):
+
+    def __init__(
+        self,
+        cluster,  # a dask cluster object, could also be IP address, Cristian what do you prefer?
+        config={},
+    ):
+
+        # initialize base class
+        super().__init__()
+
+        # set config defaults
+        config_defaults = {}
+        config = {**config_defaults, **config}
+        self.modify_dask_config(config)
+
+        # setup client
+        client = Client(cluster)
+        self.set_cluster(cluster)
+        self.set_client(client)
+
 

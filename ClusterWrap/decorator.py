@@ -1,5 +1,5 @@
 import functools
-import ClusterWrap.cluster as cluster_constructor
+from ClusterWrap import cluster as cluster_constructor
 
 
 def cluster(func):
