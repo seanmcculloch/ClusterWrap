@@ -16,4 +16,3 @@ setuptools.setup(
         'dask-jobqueue',
     ]
 )
-

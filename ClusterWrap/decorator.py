@@ -26,4 +26,3 @@ def cluster(func):
 
     # return decorated function
     return create_or_pass_cluster
-

@@ -39,4 +39,3 @@ If you need your workers to persist for more than 3 hours and 59 minutes, then y
 Stdout and Stderr output for each worker will be stored in a subdirectory called "dask_worker_logs_{PID}" with PID being the process ID of the python process used to create the cluster. This direcory will be located in current working directory of the python process at the time of cluster creation.
 
 If you need to bill a specific project other than your default group, use: `cluster_kwargs = {'project':'billed_group'}`
-

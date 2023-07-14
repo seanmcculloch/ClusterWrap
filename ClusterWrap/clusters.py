@@ -219,5 +219,3 @@ class remote_cluster(_cluster):
         client = Client(cluster)
         self.set_cluster(cluster)
         self.set_client(client)
-
-
