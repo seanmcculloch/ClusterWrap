@@ -19,12 +19,10 @@ def cluster(func):
             # get arguments and run function in cluster context
             x = kwargs['cluster_kwargs'] if 'cluster_kwargs' in kwargs else {}
             with cluster_constructor(**x) as cluster:
-                kwargs['cluster'] = cluster
-                return func(*args, **kwargs)
+                return func(*args, **kwargs, cluster=cluster)
 
         # otherwise, there is already a cluster so just run the function
-        return func(*args, **kwargs)
+        return func(*args, **kwargs, cluster=cluster)
 
     # return decorated function
     return create_or_pass_cluster
-

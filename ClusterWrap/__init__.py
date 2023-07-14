@@ -1,11 +1,11 @@
 from shutil import which
 import os
-from .clusters import janelia_lsf_cluster, local_cluster
+from .clusters import allen_slurm, local_cluster
 
 cluster = local_cluster
 
-if which('bsub') is not None:
-    if os.system('bsub -V') != 32512:
-        cluster = janelia_lsf_cluster
+if which('sbatch') is not None:
+    if os.system('sbatch -V') != 32512:
+        cluster = allen_slurm
 
 

@@ -1,20 +1,11 @@
 from dask.distributed import Client, LocalCluster
-from dask_jobqueue import LSFCluster
-from dask_jobqueue.lsf import LSFJob
+from dask_jobqueue import SLURMCluster
 import dask.config
 from pathlib import Path
 import os
 import sys
 import time
 import yaml
-
-
-# a class to help exit gracefully on our cluster
-class janelia_LSFJob(LSFJob):
-    cancel_command = "bkill -d"
-
-class janelia_LSFCluster(LSFCluster):
-    job_cls = janelia_LSFJob
 
 
 class _cluster(object):
@@ -55,27 +46,23 @@ class _cluster(object):
         if self.cluster is not None:
             return self.cluster.dashboard_link
 
-# TODO: not needed?
-#    def adapt_cluster(self, min_workers=None, max_workers=None):
-#        None
 
 
-
-class janelia_lsf_cluster(_cluster):
-
-    HOURLY_RATE_PER_CORE = 0.07
+class allen_slurm(_cluster):
+    HOURLY_RATE_PER_CORE = 0
 
     def __init__(
         self,
-        ncpus=4,
+        ncpus=64,
         processes=1,
         threads=None,
         min_workers=1,
-        max_workers=4,
-        walltime="3:59",
+        max_workers=64,
+        walltime="24:00:00",
         config={},
         **kwargs
     ):
+        print("CREATING ALLEN SLURM CLUSTER")
 
         # call super constructor
         super().__init__()
@@ -83,8 +70,9 @@ class janelia_lsf_cluster(_cluster):
         # set config defaults
         # comm.timeouts values are needed for scaling up big clusters
         config_defaults = {
-            'distributed.comm.timeouts.connect':'180s',
-            'distributed.comm.timeouts.tcp':'360s',
+            'distributed.comm.timeouts.connect':'600s',
+            'distributed.comm.timeouts.tcp':'600s',
+            'distributed.worker.resources.Foo': 1
         }
         config_defaults = {**config_defaults, **config}
         self.modify_dask_config(config_defaults)
@@ -92,13 +80,19 @@ class janelia_lsf_cluster(_cluster):
         # store ncpus/per worker and worker limits
         self.adapt = None
         self.ncpus = ncpus
-        self.min_workers = min_workers
-        self.max_workers = max_workers
+        if 'min_workers' in kwargs:
+            self.min_workers = kwargs['min_workers']
+        else:
+            self.min_workers = min_workers
+        if 'max_workers' in kwargs:
+            self.max_workers = kwargs['max_workers']
+        else:
+            self.max_workers = max_workers
 
         # set environment vars
         # prevent overthreading outside dask
         tpw = 2*ncpus  # threads per worker
-        job_script_prologue = [
+        env_extra = [
             f"export MKL_NUM_THREADS={tpw}",
             f"export NUM_MKL_THREADS={tpw}",
             f"export OPENBLAS_NUM_THREADS={tpw}",
@@ -111,10 +105,10 @@ class janelia_lsf_cluster(_cluster):
         CWD = os.getcwd()
         PID = os.getpid()
         if "local_directory" not in kwargs:
-            kwargs["local_directory"] = f"/scratch/{USER}/"
+            kwargs["local_directory"] = '/scratch/fast/'+os.environ['SLURM_JOBID']
         if "log_directory" not in kwargs:
-            log_dir = f"{CWD}/dask_worker_logs_{PID}/"
-            Path(log_dir).mkdir(parents=False, exist_ok=True)
+            log_dir = f"{CWD}/{os.environ['SLURM_JOBID']}/{PID}"
+            Path(log_dir).mkdir(parents=True, exist_ok=True)
             kwargs["log_directory"] = log_dir
 
         # compute ncpus/RAM relationship
@@ -126,17 +120,17 @@ class janelia_lsf_cluster(_cluster):
             threads = ncpus
 
         # create cluster
-        cluster = janelia_LSFCluster(
-            ncpus=ncpus,
-            processes=processes,
-            memory=memory,
-            mem=mem,
-            walltime=walltime,
-            cores=threads,
-            job_script_prologue=job_script_prologue,
+        cluster = SLURMCluster(
+            # n_workers=ncpus,
+            # processes=processes,
+            # memory=memory,
+            # mem=mem,
+            # walltime=walltime,
+            # cores=threads,
+            # log_directory=kwargs["log_directory"],
             **kwargs,
         )
-
+        print(cluster.job_script())
         # connect cluster to client
         client = Client(cluster)
         self.set_cluster(cluster)
@@ -144,8 +138,8 @@ class janelia_lsf_cluster(_cluster):
         print("Cluster dashboard link: ", cluster.dashboard_link)
         sys.stdout.flush()
 
-        # set adaptive cluster bounds
-        self.adapt_cluster(min_workers, max_workers)
+        # # set adaptive cluster bounds
+        self.adapt_cluster(self.min_workers, self.max_workers)
 
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -225,5 +219,3 @@ class remote_cluster(_cluster):
         client = Client(cluster)
         self.set_cluster(cluster)
         self.set_client(client)
-
-
